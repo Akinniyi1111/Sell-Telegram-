@@ -8,7 +8,7 @@ CHANNEL_LINK = "https://t.me/NR_receiver_News"
 SUPPORT_USERNAME = "https://t.me/TG_BUYER_NR"
 
 # Admin ID (replace with your Telegram ID)
-ADMIN_ID = 123456789  
+ADMIN_ID = 1378825382  
 
 # Storage paths (Render Disk)
 USER_FILE = "/mnt/data/users.json"
