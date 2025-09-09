@@ -1,26 +1,20 @@
-import json, os
+import os
+import json
+import logging
+from datetime import datetime
+from flask import Flask, request
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
+from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
 
-# Bot Token
-BOT_TOKEN = "8266639049:AAFvQYw-ax6y94S2zH_oMg7jA2Q1Dxh6yro"
+# --- CONFIG ---
+TOKEN = "8266639049:AAFvQYw-ax6y94S2zH_oMg7jA2Q1Dxh6yro"
+ADMIN_ID = 1378825382
 CHANNEL_LINK = "https://t.me/NR_receiver_News"
-SUPPORT_USERNAME = "https://t.me/TG_BUYER_NR"
 
-# Admin ID
-ADMIN_ID = 1378825382  
-
-# Storage paths (local for free Render plan)
+# --- STORAGE ---
 USER_FILE = "users.json"
 ORDER_FILE = "orders.json"
 
-# Country Pricing
-COUNTRIES = {
-    "malaysia": {"code": "+60", "price": 0.65, "flag": "🇲🇾"},
-    "israel": {"code": "+972", "price": 0.87, "flag": "🇮🇱"}
-}
-
-# Helper: Load & Save JSON
 def load_data(file):
     if not os.path.exists(file):
         return {}
@@ -31,226 +25,167 @@ def save_data(file, data):
     with open(file, "w") as f:
         json.dump(data, f, indent=2)
 
-# Ensure storage exists
-if not os.path.exists(USER_FILE):
-    save_data(USER_FILE, {})
-if not os.path.exists(ORDER_FILE):
-    save_data(ORDER_FILE, {})
+users = load_data(USER_FILE)
+orders = load_data(ORDER_FILE)
 
-# /start
+# --- LOGGER ---
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# --- BOT APP ---
+app = Flask(__name__)
+application = Application.builder().token(TOKEN).build()
+
+# --- COMMANDS ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.effective_user.id)
     user = update.effective_user
-    users = load_data(USER_FILE)
 
-    if str(user.id) not in users:
-        users[str(user.id)] = {
+    if user_id not in users:
+        users[user_id] = {
             "name": user.full_name,
             "balance": 0.0,
             "referrals": 0,
-            "sold": 0
+            "accounts_sold": 0,
         }
         save_data(USER_FILE, users)
 
-    keyboard = [
-        [InlineKeyboardButton("📋 My Profile", callback_data="profile")],
-        [InlineKeyboardButton("📢 Join Channel", url=CHANNEL_LINK)],
-        [InlineKeyboardButton("🆘 Contact Support", url=SUPPORT_USERNAME)],
-        [InlineKeyboardButton("👥 Referral", callback_data="referral")],
-        [InlineKeyboardButton("💼 Sell Account", callback_data="sell")],
-        [InlineKeyboardButton("📂 Pending Orders", callback_data="pending")]
-    ]
-    await update.message.reply_text(
-        f"👋 Welcome to *NR Receiver Bot*!\n\nChoose an option below:",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode="Markdown"
+        keyboard = [[InlineKeyboardButton("📢 Join Channel", url=CHANNEL_LINK)],
+                    [InlineKeyboardButton("➡️ Continue to Menu", callback_data="continue_menu")]]
+        await update.message.reply_text("👋 Welcome! Please join our channel first:", 
+                                        reply_markup=InlineKeyboardMarkup(keyboard))
+    else:
+        await update.message.reply_text(
+            "🎉 Welcome to Robot!\n\n"
+            "Enter your phone number with the country code.\n"
+            "Example: +62xxxxxxx\n\n"
+            "Type /cap to see available countries."
+        )
+
+async def cap(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = """📋 Available Countries
+
+🇵🇭 +63  | 💰 0.65$ | ⏰ 1800s
+🇸🇻 +503 | 💰 0.70$ | ⏰ 600s
+🇮🇱 +972 | 💰 0.80$ | ⏰ 1800s
+🇵🇸 +970 | 💰 0.85$ | ⏰ 600s
+🇳🇿 +64  | 💰 1.10$ | ⏰ 600s
+🇹🇷 +90  | 💰 1.15$ | ⏰ 600s
+🇲🇩 +373 | 💰 1.15$ | ⏰ 600s
+🇬🇱 +299 | 💰 1.45$ | ⏰ 600s
+🇨🇿 +420 | 💰 1.65$ | ⏰ 600s
+🇹🇼 +886 | 💰 2.10$ | ⏰ 600s
+🇳🇱 +31  | 💰 2.15$ | ⏰ 600s
+🇪🇸 +34  | 💰 3.40$ | ⏰ 600s
+🇫🇷 +33  | 💰 3.50$ | ⏰ 600s
+🇩🇪 +49  | 💰 4.00$ | ⏰ 600s
+
+🌍 Total Countries: 14
+"""
+    await update.message.reply_text(text)
+
+async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.effective_user.id)
+    if user_id not in users:
+        await update.message.reply_text("⚠️ You don’t have a profile yet. Type /start first.")
+        return
+    
+    user = users[user_id]
+    now = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+    text = (
+        f"👤 Name: {user['name']}\n"
+        f"💰 Balance: ${user['balance']:.2f}\n"
+        f"👥 Total Referrals: {user['referrals']}\n"
+        f"📱 Accounts Sold: {user['accounts_sold']}\n"
+        f"🕒 Last Check: {now}"
     )
 
-# /id (to get user ID)
-async def get_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(f"👤 Your Telegram ID is: `{update.effective_user.id}`", parse_mode="Markdown")
+    keyboard = [[InlineKeyboardButton("💸 Withdraw", callback_data="withdraw")]]
+    await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
 
-# Button Handler
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    users = load_data(USER_FILE)
-    orders = load_data(ORDER_FILE)
-    user_id = str(query.from_user.id)
-
-    if query.data == "profile":
-        u = users[user_id]
-        text = (f"📋 *Your Profile*\n\n"
-                f"👤 Name: {u['name']}\n"
-                f"💰 Balance: ${u['balance']:.2f}\n"
-                f"👥 Referrals: {u['referrals']}\n"
-                f"📦 Accounts Sold: {u['sold']}")
-        await query.edit_message_text(text, parse_mode="Markdown")
-
-    elif query.data == "referral":
-        bot_username = (await context.bot.get_me()).username
-        link = f"https://t.me/{bot_username}?start={user_id}"
-        await query.edit_message_text(f"👥 *Your Referral Link:*\n{link}", parse_mode="Markdown")
-
-    elif query.data == "sell":
-        keyboard = [
-            [InlineKeyboardButton(f"{COUNTRIES['malaysia']['code']} Malaysia {COUNTRIES['malaysia']['price']}$ {COUNTRIES['malaysia']['flag']}", callback_data="sell_malaysia")],
-            [InlineKeyboardButton(f"{COUNTRIES['israel']['code']} Israel {COUNTRIES['israel']['price']}$ {COUNTRIES['israel']['flag']}", callback_data="sell_israel")],
-            [InlineKeyboardButton("🔙 Back", callback_data="back")]
-        ]
-        await query.edit_message_text("💼 Select a country account to sell:", reply_markup=InlineKeyboardMarkup(keyboard))
-
-    elif query.data.startswith("sell_"):
-        country = query.data.split("_")[1]
-        context.user_data["selling_country"] = country
-        await query.edit_message_text("📱 Send me the *phone number* of the account you want to sell:", parse_mode="Markdown")
-
-    elif query.data == "pending":
-        pending_orders = [o for o in orders.values() if o["user_id"] == user_id and o["status"] != "completed"]
-        if not pending_orders:
-            await query.edit_message_text("📂 You have no pending orders.")
-        else:
-            text = "📂 *Your Pending Orders:*\n\n"
-            for o in pending_orders:
-                text += f"ID: {o['id']} | {o['country']} | {o['phone']} | Status: {o['status']}\n"
-            await query.edit_message_text(text, parse_mode="Markdown")
-
-    elif query.data == "back":
-        await start(update, context)
-
-    # ===== ADMIN CONTROLS =====
-    elif query.from_user.id == ADMIN_ID:
-        if query.data.startswith("admin_request_"):
-            order_id = query.data.split("_")[2]
-            orders[order_id]["status"] = "otp_requested"
-            save_data(ORDER_FILE, orders)
-
-            await context.bot.send_message(
-                chat_id=orders[order_id]["user_id"],
-                text="🔐 Please send the OTP code for your account now."
-            )
-            await query.edit_message_text(f"✅ OTP requested for order {order_id}")
-
-        elif query.data.startswith("admin_reject_"):
-            order_id = query.data.split("_")[2]
-            orders[order_id]["status"] = "rejected"
-            save_data(ORDER_FILE, orders)
-
-            await context.bot.send_message(
-                chat_id=orders[order_id]["user_id"],
-                text="❌ Your sell request has been rejected."
-            )
-            await query.edit_message_text(f"❌ Order {order_id} rejected")
-
-        elif query.data.startswith("admin_approve_"):
-            order_id = query.data.split("_")[2]
-            order = orders[order_id]
-            user_id = order["user_id"]
-
-            # Update user balance
-            users[user_id]["balance"] += COUNTRIES[order["country"]]["price"]
-            users[user_id]["sold"] += 1
-            save_data(USER_FILE, users)
-
-            orders[order_id]["status"] = "completed"
-            save_data(ORDER_FILE, orders)
-
-            await context.bot.send_message(
-                chat_id=user_id,
-                text=f"✅ Your account has been successfully sold!\n💰 ${COUNTRIES[order['country']]['price']} credited to your balance."
-            )
-            await query.edit_message_text(f"✅ Order {order_id} approved and user credited.")
-
-        elif query.data.startswith("admin_retry_"):
-            order_id = query.data.split("_")[2]
-            orders[order_id]["status"] = "otp_requested"
-            save_data(ORDER_FILE, orders)
-
-            await context.bot.send_message(
-                chat_id=orders[order_id]["user_id"],
-                text="🔄 Please send another OTP, the previous one has expired."
-            )
-            await query.edit_message_text(f"🔄 Another OTP requested for order {order_id}")
-
-# Handle Phone Numbers & OTP Flow
-async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    user_id = str(user.id)
-    users = load_data(USER_FILE)
-    orders = load_data(ORDER_FILE)
+# --- MSG HANDLER (numbers + otp) ---
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
+    user_id = str(update.effective_user.id)
 
-    # User is sending phone number
-    if "selling_country" in context.user_data:
-        phone = text
-        country = context.user_data["selling_country"]
-
-        # Check if phone already sold
-        for order in orders.values():
-            if order["phone"] == phone and order["status"] == "completed":
-                await update.message.reply_text("❌ This number has already been sold.")
-                return
-
-        # Save new order
-        order_id = str(len(orders) + 1)
-        orders[order_id] = {
-            "id": order_id,
-            "user_id": user_id,
-            "phone": phone,
-            "country": country,
-            "status": "pending"
-        }
+    # detect phone number
+    if text.startswith("+") and text[1:].isdigit():
+        orders[user_id] = {"number": text, "status": "pending"}
         save_data(ORDER_FILE, orders)
 
-        await update.message.reply_text("✅ Processing... OTP will be requested within 10 minutes.\nStay active to avoid rejection.")
-
-        # Notify Admin
+        await update.message.reply_text("⏳ Processing please wait...")
+        
+        # send to admin
         keyboard = [
-            [InlineKeyboardButton("✅ Request OTP", callback_data=f"admin_request_{order_id}")],
-            [InlineKeyboardButton("❌ Reject", callback_data=f"admin_reject_{order_id}")]
+            [InlineKeyboardButton("✅ Request OTP", callback_data=f"reqotp_{user_id}")],
+            [InlineKeyboardButton("❌ Cancel Deal", callback_data=f"cancel_{user_id}")]
         ]
         await context.bot.send_message(
             chat_id=ADMIN_ID,
-            text=f"📩 *New Sell Request*\n\n👤 User: {user.full_name}\n📱 Phone: {phone}\n🌍 Country: {country}",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode="Markdown"
+            text=f"📩 New number submitted:\n{text}\nUser ID: {user_id}",
+            reply_markup=InlineKeyboardMarkup(keyboard)
         )
-        del context.user_data["selling_country"]
 
-    # User sending OTP (check for pending OTP request)
-    else:
-        pending_orders = [o for o in orders.values() if o["user_id"] == user_id and o["status"] == "otp_requested"]
-        if pending_orders:
-            order = pending_orders[0]
-            order_id = order["id"]
+# --- CALLBACK HANDLER ---
+async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = query.data
 
-            orders[order_id]["otp"] = text
-            orders[order_id]["status"] = "otp_submitted"
-            save_data(ORDER_FILE, orders)
+    if data == "withdraw":
+        user_id = str(query.from_user.id)
+        bal = users[user_id]["balance"]
+        if bal < 3:
+            await query.edit_message_text("⚠️ Insufficient balance (minimum $3).")
+        else:
+            await query.edit_message_text("✅ Withdrawal request submitted!")
+    elif data.startswith("reqotp_"):
+        user_id = data.split("_")[1]
+        num = orders[user_id]["number"]
+        await context.bot.send_message(chat_id=user_id, text=f"🇹🇼 Enter the code sent to the number {num}")
+    elif data.startswith("cancel_"):
+        user_id = data.split("_")[1]
+        await context.bot.send_message(chat_id=user_id, text="❌ Your deal has been cancelled by admin.")
+        del orders[user_id]
+        save_data(ORDER_FILE, orders)
 
-            # Send OTP to admin
-            keyboard = [
-                [InlineKeyboardButton("🔄 Request Another Code", callback_data=f"admin_retry_{order_id}")],
-                [InlineKeyboardButton("✅ Approve", callback_data=f"admin_approve_{order_id}")],
-                [InlineKeyboardButton("❌ Reject", callback_data=f"admin_reject_{order_id}")]
-            ]
-            await context.bot.send_message(
-                chat_id=ADMIN_ID,
-                text=f"🔐 OTP received for Order {order_id}\nPhone: {order['phone']}\nOTP: {text}",
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
-            await update.message.reply_text("✅ OTP received. Please wait for admin review.")
+# --- HELP ---
+async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Available commands: /start, /cap, /balance, /cancel, /help")
 
-# Main
-def main():
-    app = Application.builder().token(BOT_TOKEN).build()
+# --- SETUP HANDLERS ---
+application.add_handler(CommandHandler("start", start))
+application.add_handler(CommandHandler("cap", cap))
+application.add_handler(CommandHandler("balance", balance))
+application.add_handler(CommandHandler("help", help_cmd))
+application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+application.add_handler(MessageHandler(filters.COMMAND, help_cmd))
+application.add_handler(MessageHandler(filters.TEXT, handle_message))
+application.add_handler(MessageHandler(filters.ALL, handle_message))
+application.add_handler(MessageHandler(filters.ALL, handle_message))
+application.add_handler(application.add_handler)
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("id", get_id))
-    app.add_handler(CallbackQueryHandler(button_handler))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
+application.add_handler(application.add_handler)
+application.add_handler(application.add_handler)
+application.add_handler(application.add_handler)
+application.add_handler(application.add_handler)
+application.add_handler(application.add_handler)
+application.add_handler(application.add_handler)
+application.add_handler(application.add_handler)
+application.add_handler(application.add_handler)
+application.add_handler(application.add_handler)
 
-    print("Bot running...")
-    app.run_polling()
+# --- FLASK ROUTE ---
+@app.route("/webhook", methods=["POST"])
+def webhook():
+    update = Update.de_json(request.get_json(force=True), application.bot)
+    application.update_queue.put_nowait(update)
+    return "ok"
+
+@app.route("/")
+def home():
+    return "Bot is running!", 200
 
 if __name__ == "__main__":
-    main()
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
